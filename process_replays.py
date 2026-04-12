@@ -729,8 +729,10 @@ def parse_showdown_replay(log_text, replay_id="unknown"):
                     if player:
                         acting_player = player
                         is_player_action = True
-                        action_description = f"move:{move_name}"
-                        move_used_this_action = move_name
+                        # Normalize move name to match how features/revealed_moves are stored
+                        move_name_normalized = normalize_move_name(move_name)
+                        action_description = f"move:{move_name_normalized}"
+                        move_used_this_action = move_name_normalized
 
                         # Update nickname map based on move identifier (no change needed here)
                         slot_that_moved = active_slot.get(acting_player)
@@ -792,9 +794,10 @@ def parse_showdown_replay(log_text, replay_id="unknown"):
              print("--- Continuing parsing ---")
 
     # --- Finalize ---
-    final_winner = current_state.get('battle_winner')
+    # NOTE: We intentionally do NOT broadcast battle_winner back to all rows.
+    # Who won the battle is future information not available at the time of each move decision.
+    # The trainer must drop this column if present in raw data to prevent leakage.
     for state in game_states:
-        state['battle_winner'] = final_winner
         state.setdefault('last_move_p1', 'none')
         state.setdefault('last_move_p2', 'none')
 
