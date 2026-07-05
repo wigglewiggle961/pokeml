@@ -131,7 +131,7 @@ def build_medium_X(df,
                    min_feature_replay_count=50,
                    blind_own_bench=False,
                    blind_opp_bench=False,
-                   smogon_json_path='gen9ou-0.json'):
+                   smogon_json_path='data/gen9ou-0.json'):
     """
     Builds the 'medium' feature DataFrame from a pre-filtered replay Parquet DataFrame.
 

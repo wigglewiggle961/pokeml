@@ -28,15 +28,16 @@ tf.get_logger().setLevel('ERROR')
 warnings.filterwarnings('ignore', category=UserWarning, module='sklearn')
 warnings.filterwarnings('ignore', category=pd.errors.PerformanceWarning)
 warnings.filterwarnings('ignore', category=FutureWarning)
-USAGE_STATS_JSON = "gen9ou-0.json"
+USAGE_STATS_JSON = "data/gen9ou-0.json"
 
 def get_switch_slot(row, target_species):
-    for slot in range(1, 7):
-        if row.get(f'p1_slot{slot}_is_active', 0) == 1:
-            continue  # Skip active slot
+    active_slot = row['p1_active_slot']
+    bench_slots = [s for s in range(1, 7) if s != active_slot]
+    
+    for bench_idx, slot in enumerate(bench_slots):
         if row.get(f'p1_slot{slot}_species', '').lower() == target_species.lower():
-            return slot - 1 if slot > row['p1_active_slot'] else slot  # Relative bench slot (1-5), adjust as needed
-    return None  # If no match (rare), drop row
+            return bench_idx  
+    return None
 
 def load_smogon_moves(json_filepath):
     """Loads Smogon usage stats JSON and extracts valid moves for each Pokemon."""
@@ -161,7 +162,7 @@ def train_tensorflow_switch_target_predictor(X_train_processed, X_val_processed,
     print(f"TF Test Accuracy: {accuracy:.4f}")
 
     # Save Model
-    model_save_path = f'switch_target_predictor_tf_model_{model_suffix}.keras'
+    model_save_path = f'models/switch_target_predictor_tf_model_{model_suffix}.keras'
     print(f"Saving TF model to {model_save_path}")
     try:
         model.save(model_save_path)
@@ -352,7 +353,7 @@ def train_lgbm_switch_target_predictor(X_train, X_val, X_test,
     importances = pd.DataFrame({'feature': final_feature_names, 'importance': lgbm_model.feature_importance()})
     importances = importances.sort_values('importance', ascending=False)
     print(importances.head(50))  # Log top features
-    joblib.dump(importances, f'switch_target_feature_importances_{model_suffix}.joblib')
+    joblib.dump(importances, f'models/switch_target_feature_importances_{model_suffix}.joblib')
 
     # Evaluate Final LightGBM Model
     print("\nEvaluating Final LGBM model on the test set...")
@@ -361,6 +362,19 @@ def train_lgbm_switch_target_predictor(X_train, X_val, X_test,
         y_pred_class = np.argmax(y_pred_proba, axis=1) # Get the class with the highest probability
         accuracy = accuracy_score(y_test, y_pred_class)
         print(f"Final LGBM Test Accuracy: {accuracy:.4f}")
+        # Sample 10 random test rows for inspection (adjust n=10 as needed)
+        sample_indices = np.random.choice(len(y_test), size=10, replace=False)
+        sample_df = X_test_lgbm_final.iloc[sample_indices].copy()  # Key features from processed test data
+        sample_df['true_slot'] = y_test.iloc[sample_indices]  # Actual label
+        sample_df['pred_slot'] = y_pred_class[sample_indices]  # Predicted label
+        sample_df['correct'] = sample_df['true_slot'] == sample_df['pred_slot']
+
+        # Select key columns to print (e.g., active species, HP, last moves—customize based on your features)
+        key_cols = ['p1_active_species', 'p2_active_species', 'p1_active_hp_perc', 'p2_active_hp_perc', 'last_move_p1', 'last_move_p2'] + \
+                [col for col in sample_df.columns if '_slot' in col and ('species' in col or 'hp_perc' in col)]  # Add slot specifics
+
+        print("\n--- Sample Test Rows (True vs. Pred Slots) ---")
+        print(sample_df[key_cols + ['true_slot', 'pred_slot', 'correct']].to_string(index=False))
 
         print("\nFinal LGBM Classification Report (Test Set):")
         # ***  Use label_encoder to show Pokémon names in the report ***
@@ -373,9 +387,9 @@ def train_lgbm_switch_target_predictor(X_train, X_val, X_test,
         print(f"Error during final LGBM evaluation: {e}")
 
     #  New save paths for switch target prediction
-    model_save_path = f'switch_target_predictor_lgbm_model_{model_suffix}.txt'
-    lgbm_info_path = f'switch_target_predictor_lgbm_feature_info_{model_suffix}.joblib'
-    scaler_path = f'switch_target_predictor_lgbm_scaler_{model_suffix}.joblib'
+    model_save_path = f'models/switch_target_predictor_lgbm_model_{model_suffix}.txt'
+    lgbm_info_path = f'models/switch_target_predictor_lgbm_feature_info_{model_suffix}.joblib'
+    scaler_path = f'models/switch_target_predictor_lgbm_scaler_{model_suffix}.joblib'
 
     print(f"Saving final LGBM model to {model_save_path}")
     lgbm_model.save_model(model_save_path)
@@ -510,7 +524,7 @@ def run_switch_target_training(parquet_path, model_type='tensorflow', feature_se
 
         # Save the label encoder
         model_suffix = f"{feature_set}_moves" if feature_set == 'simplified' else feature_set
-        encoder_path = f'switch_target_predictor_label_encoder_{model_suffix}.joblib'
+        encoder_path = f'models/switch_target_predictor_label_encoder_{model_suffix}.joblib'
         joblib.dump(label_encoder, encoder_path)
         print(f"Label encoder saved to {encoder_path}")
 
@@ -644,8 +658,8 @@ def run_switch_target_training(parquet_path, model_type='tensorflow', feature_se
     print(f"Class weights calculated for {len(class_weight_dict)} classes.")
 
     # --- Preprocessing  ---
-    feature_lists_path = f'switch_target_predictor_feature_lists_{model_suffix}.joblib'
-    preprocessor_path = f'switch_target_predictor_tf_preprocessor_{model_suffix}.joblib'
+    feature_lists_path = f'models/switch_target_predictor_feature_lists_{model_suffix}.joblib'
+    preprocessor_path = f'models/switch_target_predictor_tf_preprocessor_{model_suffix}.joblib'
     final_train_cols = X_train.columns.tolist()
     numerical_features = [f for f in numerical_features if f in final_train_cols]
     categorical_features = [f for f in categorical_features if f in final_train_cols]

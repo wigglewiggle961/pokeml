@@ -1,0 +1,41 @@
+# ── Python ─────────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# ── Replay data (raw logs — re-downloadable via download scripts) ──
+replay_logs/
+replay_logs_2/
+replay_logs_3/
+replay_20k/
+metamon_clean/
+metamon_subset/
+metamon_parquet_files/
+
+# ── Datasets ───────────────────────────────────────────
+*.parquet
+*.csv
+gen9ou-0.json
+
+# ── Model artifacts ────────────────────────────────────
+# All trained artifacts live in models/; provenance is tracked in .planning/experiments.md
+models/
+*.joblib
+*.keras
+*_model_*.txt
+*_checkpoint_*.txt
+*.db
+models_archive/
+
+# ── Scratch / logs ─────────────────────────────────────
+abababa.txt
+
+# ── Archived / superseded scripts (kept on disk, out of git) ──
+archive/
+
+# ── Editor / tooling state ─────────────────────────────
+.vscode/
+.agent/
+.agents/

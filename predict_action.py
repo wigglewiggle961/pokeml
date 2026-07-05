@@ -37,21 +37,21 @@ warnings.filterwarnings('ignore', category=FutureWarning) # Ignore pandas 3.0 wa
 # ===========================================
 # Configuration
 # ===========================================
-MOVE_MODEL_PATH = "action_lgbm_model_v4_medium_move_only.txt"
-MOVE_INFO_PATH = "action_lgbm_feature_info_v4_medium_move_only.joblib"
-MOVE_SCALER_PATH = "action_lgbm_scaler_v4_medium_move_only.joblib"
-MOVE_ENCODER_PATH = "action_label_encoder_v4_medium_move_only.joblib"
+MOVE_MODEL_PATH = "models/action_lgbm_model_v4_medium_move_only.txt"
+MOVE_INFO_PATH = "models/action_lgbm_feature_info_v4_medium_move_only.joblib"
+MOVE_SCALER_PATH = "models/action_lgbm_scaler_v4_medium_move_only.joblib"
+MOVE_ENCODER_PATH = "models/action_label_encoder_v4_medium_move_only.joblib"
 
-SWITCH_BINARY_MODEL_PATH = "switch_predictor_lgbm_model_v2_simplified.txt"
-SWITCH_BINARY_INFO_PATH = "switch_predictor_lgbm_feature_info_v2_simplified.joblib"
-SWITCH_BINARY_SCALER_PATH = "switch_predictor_lgbm_scaler_v2_simplified.joblib"
+SWITCH_BINARY_MODEL_PATH = "models/switch_predictor_lgbm_model_v2_simplified.txt"
+SWITCH_BINARY_INFO_PATH = "models/switch_predictor_lgbm_feature_info_v2_simplified.joblib"
+SWITCH_BINARY_SCALER_PATH = "models/switch_predictor_lgbm_scaler_v2_simplified.joblib"
 
-SWITCH_TARGET_MODEL_PATH = "switch_target_predictor_lgbm_model_simplified_moves.txt"
-SWITCH_TARGET_INFO_PATH = "switch_target_predictor_lgbm_feature_info_simplified_moves.joblib"
-SWITCH_TARGET_SCALER_PATH = "switch_target_predictor_lgbm_scaler_simplified_moves.joblib"
-SWITCH_TARGET_ENCODER_PATH = "switch_target_predictor_label_encoder_simplified_moves.joblib"
+SWITCH_TARGET_MODEL_PATH = "models/switch_target_predictor_lgbm_model_simplified_moves.txt"
+SWITCH_TARGET_INFO_PATH = "models/switch_target_predictor_lgbm_feature_info_simplified_moves.joblib"
+SWITCH_TARGET_SCALER_PATH = "models/switch_target_predictor_lgbm_scaler_simplified_moves.joblib"
+SWITCH_TARGET_ENCODER_PATH = "models/switch_target_predictor_label_encoder_simplified_moves.joblib"
 
-USAGE_STATS_JSON = "gen9ou-0.json" # Path to your Smogon usage stats
+USAGE_STATS_JSON = "data/gen9ou-0.json" # Path to your Smogon usage stats
 
 # Showdown Credentials (Replace or use environment variables!)
 SHOWDOWN_USERNAME = os.environ.get("SHOWDOWN_USER", "www31")
@@ -59,7 +59,7 @@ SHOWDOWN_PASSWORD = os.environ.get("SHOWDOWN_PASS", "vimvimvim333")
 
 BATTLE_FORMAT = "gen9ou"
 LOG_LEVEL = 20 # 10=DEBUG, 20=INFO, 30=WARNING
-SWITCH_THRESHOLD = 0.5
+SWITCH_THRESHOLD = 0.85
 
 team="""
 Great Tusk @ Heavy-Duty Boots
@@ -150,6 +150,13 @@ def load_model_artifacts(name, model_path, info_path, scaler_path, encoder_path=
         print(f"FATAL ERROR loading artifacts for '{name}': {e}")
         raise
 
+def get_switch_slot(row, target_species):
+    for slot in range(1, 7):
+        if row.get(f'p1_slot{slot}_is_active', 0) == 1:
+            continue  # Skip active slot
+        if row.get(f'p1_slot{slot}_species', '').lower() == target_species.lower():
+            return slot - 1 
+    return None  # If no match (rare), drop row
 # --- Smogon Moves Loading ---
 def load_smogon_moves(json_filepath):
     """Loads Smogon usage stats JSON and extracts valid moves for each Pokemon."""
@@ -176,45 +183,57 @@ def load_smogon_moves(json_filepath):
             return {}, metagame
 
         smogon_data = raw_data['data']
+        usage_dict = {pokemon_name: pokemon_data.get('usage', 0) for pokemon_name, pokemon_data in smogon_data.items()}
+        top_100 = sorted(usage_dict.items(), key=lambda x: x[1], reverse=True)[:100]
+        top_100_names = [name.lower().replace(' ', '').replace('-', '') for name, _ in top_100]
         pokemon_count = 0
         move_count_total = 0
 
+        # --- NEW STUFF ---
+        usage_rows = []
         for pokemon_name, pokemon_data in smogon_data.items():
-            # Standardize Pokemon Name from Smogon data (lowercase, no spaces/hyphens)
-            # This should match how poke-env species IDs are likely formatted
             pokemon_key = pokemon_name.lower().replace(' ', '').replace('-','')
+            
+            raw_count = pokemon_data.get('Raw count', 1.0)
+            if raw_count == 0: raw_count = 1.0
+            usage_row = {'species': pokemon_key}
 
             if isinstance(pokemon_data, dict) and 'Moves' in pokemon_data and isinstance(pokemon_data['Moves'], dict):
                 valid_moves_set = set()
-                for move_key in pokemon_data['Moves'].keys():
-                    # Format should match label_encoder format ("move:moveid")
-                    standardized_action = f"move:{move_key.lower()}" # Assuming encoder used lowercase move IDs
+                for move_key, count in pokemon_data['Moves'].items():
+                    standardized_action = f"move:{move_key.lower()}"
                     valid_moves_set.add(standardized_action)
+                    
+                    # For usage percentages (must match training exactly)
+                    sanitized_move = move_key.lower().replace(' ', '').replace('-', '').replace('_', '').replace(':', '').replace('%', 'perc')
+                    usage_row[sanitized_move] = float(count) / float(raw_count)
 
                 if valid_moves_set:
-                    pokemon_valid_moves[pokemon_key] = valid_moves_set # Use standardized key
+                    pokemon_valid_moves[pokemon_key] = valid_moves_set
                     pokemon_count += 1
                     move_count_total += len(valid_moves_set)
+                    
+            usage_rows.append(usage_row)
 
         print(f"  Successfully extracted moves for {pokemon_count} Pokemon.")
         print(f"  Total unique Pokemon-Move combinations found: {move_count_total}")
-        return pokemon_valid_moves, metagame
+        
+        usage_df = pd.DataFrame(usage_rows).set_index('species').fillna(0.0)
+        return pokemon_valid_moves, metagame, top_100_names, usage_df
 
     except FileNotFoundError:
         print(f"  Error: Smogon JSON file not found at '{json_filepath}'")
-        raise
+        return {}, metagame, [], pd.DataFrame()
     except json.JSONDecodeError as e:
         print(f"  Error: Failed to decode Smogon JSON file '{json_filepath}'. Invalid JSON: {e}")
-        raise
+        return {}, metagame, [], pd.DataFrame()
     except Exception as e:
         print(f"  Error: An unexpected error occurred while loading Smogon JSON: {e}")
-        raise
+        return {}, metagame, [], pd.DataFrame()
 
 # --- Data Preparation (Adapted from predict_action.py) ---
 # This function prepares the single row DataFrame for the model
 # predict_action.py
-
-
 
 def prepare_input_data_medium(df_input_raw, feature_info, scaler):
     """Prepares the input DataFrame row for the 'medium' feature set model."""
@@ -283,7 +302,7 @@ def prepare_input_data_medium(df_input_raw, feature_info, scaler):
             # Generate 0/1 values for known moves based on the revealed set
             for move in known_moves_list:
                 # Sanitize exactly as in training
-                sanitized_move_name = move.replace(' ', '_').replace('-', '_').replace(':', '').replace('%', 'perc')
+                sanitized_move_name = move.lower().replace(' ', '').replace('-', '').replace('_', '').replace(':', '').replace('%', 'perc')
                 expected_col_name = f"{new_col_prefix}_{sanitized_move_name}"
 
                 # Only store data for binary columns the model actually expects
@@ -572,12 +591,13 @@ class PredictionPlayer(Player):
 
         # --- Load Smogon Moves ---
         try:
-            self.pokemon_valid_moves, _ = load_smogon_moves(USAGE_STATS_JSON)
+            self.pokemon_valid_moves, _, _, self.smogon_usages_df = load_smogon_moves(USAGE_STATS_JSON)
             if not self.pokemon_valid_moves:
                  print("Warning: Smogon valid moves data is empty. Filtering will be skipped.")
         except Exception as e:
              print(f"ERROR loading Smogon moves: {e}. Filtering will be skipped.")
-             self.pokemon_valid_moves = {} # Ensure it's an empty dict
+             self.pokemon_valid_moves = {}
+             self.smogon_usages_df = pd.DataFrame()
 
 
     def _update_last_moves(self, split_messages):
@@ -727,6 +747,15 @@ class PredictionPlayer(Player):
                 for stat in ['atk', 'def', 'spa', 'spd', 'spe']:
                     flat_state[f'{prefix}_boost_{stat}'] = boosts.get(stat, 0)
 
+                # --- NEW: Inject Smogon Usage Stats during Inference ---
+                if hasattr(self, 'smogon_usages_df') and not self.smogon_usages_df.empty:
+                    # species_name is already lowercase and sanitized above
+                    if species_name in self.smogon_usages_df.index:
+                        p_usage = self.smogon_usages_df.loc[species_name]
+                        for move_name, usage_val in p_usage.items():
+                            flat_state[f'{player_prefix}_active_usage_{move_name}'] = usage_val
+                # --------------------------------------------------------
+
                 # Revealed Moves: Normalize move name case to Title Case and format
                 # Filter 'conversion' like parser might implicitly do, adjust if needed
                 moves_set = {m.id.title() for m in pkmn.moves.values() if m.id != 'conversion'}
@@ -806,6 +835,12 @@ class PredictionPlayer(Player):
             flat_state['p1_active_terastallized'] = flat_state[f'{active_p1_prefix}_terastallized']
             flat_state['p1_active_tera_type'] = flat_state[f'{active_p1_prefix}_tera_type'] # Already Title Case
             flat_state['p1_active_revealed_moves_str'] = flat_state[f'{active_p1_prefix}_revealed_moves'] # Already Title Case moves, comma-sep
+            active_slot = None
+            for i in range(1, 7):
+                if flat_state.get(f'p1_slot{i}_is_active', 0) == 1:
+                    active_slot = i
+                    break
+            flat_state['p1_active_slot'] = active_slot or 0
         else:
             print("Warning: Could not find P1 active Pokemon details during mapping.")
             # Set defaults consistent with prepare_input expectations
@@ -877,8 +912,8 @@ class PredictionPlayer(Player):
                 flat_state[key] = 1 if count > 0 else 0
 
         # --- Return the flat dictionary ---
-        print(f"Sample mapped state keys: {list(flat_state.keys())[:30]}...") # Debug
-        print(f"Sample mapped state values (first 10): {list(flat_state.values())[:30]}...") # Debug
+        print(f"Sample mapped state keys: {list(flat_state.keys())}...") # Debug
+        print(f"Sample mapped state values (first 10): {list(flat_state.values())}...") # Debug
         return flat_state
 
     def _prepare_data_for_move_model(self, df_input_raw: pd.DataFrame, model_info: dict, model_scaler: 'StandardScaler') -> pd.DataFrame:
@@ -975,6 +1010,28 @@ class PredictionPlayer(Player):
             # Drop the original string columns
             df = df.drop(columns=[f"{p}_slot{s}_revealed_moves" for p in ['p1', 'p2'] for s in range(1, 7)], errors='ignore')
             print(f"  Generated OHE features. DataFrame now has {df.shape[1]} columns.")
+
+        # --- DYNAMIC SMOGON USAGE STATS INJECTION ---
+        usage_prefixes = ['p1_active_usage_', 'p2_active_usage_']
+        if any(any(f.startswith(prefix) for f in all_model_features) for prefix in usage_prefixes) and getattr(self, 'smogon_usages_df', None) is not None and not self.smogon_usages_df.empty:
+            print("  Model requires Smogon usage stats. Injecting...")
+            new_usage_columns = {}
+            for p in ['p1', 'p2']:
+                species_col = f"{p}_active_species"
+                if species_col in df.columns:
+                    species_key = df.iloc[0].get(species_col, 'Unknown').lower().replace(' ', '').replace('-', '')
+                    
+                    if species_key in self.smogon_usages_df.index:
+                        usages = self.smogon_usages_df.loc[species_key]
+                        expected_usage_cols = [f for f in all_model_features if f.startswith(f"{p}_active_usage_")]
+                        for col_name in expected_usage_cols:
+                            sanitized_move_name = col_name.replace(f"{p}_active_usage_", "")
+                            new_usage_columns[col_name] = [usages.get(sanitized_move_name, 0.0)]
+            
+            if new_usage_columns:
+                usage_df_to_add = pd.DataFrame(new_usage_columns, index=df.index)
+                df = pd.concat([df, usage_df_to_add], axis=1)
+                print(f"  Injected {len(new_usage_columns)} usage stat features.")
         ### END MODIFICATION ###
 
         # --- SELECT, FILL, CAST, and SCALE (This part remains the same) ---
@@ -1018,32 +1075,26 @@ class PredictionPlayer(Player):
         # Get class predictions by finding the index of the max probability for each row
         predicted_class_indices = np.argsort(predictions[0])[::-1] # Get ranked indices
         
-        available_species_names = {p.species for p in available_switches}
+        available_switches_sorted = sorted(available_switches, key=lambda p: p.slot if hasattr(p, 'slot') else available_switches.index(p) + 1)
 
-        print("\n--- Top 5 Switch Predictions ---")
-        top_k = min(5, len(predicted_class_indices)) # Show up to 5 predictions
+        print("\n--- Top Switch Slot Predictions ---")
+        top_k = min(len(predicted_class_indices), len(available_switches_sorted))
         for i in range(top_k):
             class_idx = predicted_class_indices[i]
             prob = predictions[0][class_idx]
-            predicted_species = self.switch_target_encoder.classes_[class_idx]
-            is_valid = predicted_species in available_species_names
-            
-            # Print a formatted line for the report
-            print(f"  {i+1}. {predicted_species:<25} (Prob: {prob:.2%}) {'[VALID]' if is_valid else ''}")
+            predicted_slot_label = self.switch_target_encoder.classes_[class_idx]  # e.g., 0 for bench1
+            is_valid = class_idx < len(available_switches_sorted)  # Since slots 0-(len-1)
+            print(f"  {i+1}. Slot {predicted_slot_label:<5} (Prob: {prob:.2%}) {'[VALID]' if is_valid else ''}")
         print("-" * 30)
 
         for class_idx in predicted_class_indices:
-            predicted_species = self.switch_target_encoder.classes_[class_idx]
-            print(f"  Checking predicted switch: '{predicted_species}'...")
-            
-            # Check if this Pokémon is in our list of available switches
-            if predicted_species in available_species_names:
-                for p in available_switches:
-                    if p.species == predicted_species:
-                        print(f"    VALID. Choosing '{p.species}'.")
-                        return p # Return the actual Pokemon object
+            print(f"  Checking predicted slot: {class_idx}...")
+            if class_idx < len(available_switches_sorted):
+                chosen_pkmn = available_switches_sorted[class_idx]
+                print(f"    VALID. Choosing '{chosen_pkmn.species}' from slot {class_idx}.")
+                return chosen_pkmn
         
-        print("  No predicted switch was a valid option.")
+        print("  No predicted slot was valid (fallback).")
         return None
 
     def _find_best_valid_move(self, predictions: np.ndarray, available_moves: list):

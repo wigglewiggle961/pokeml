@@ -109,7 +109,7 @@ def train_tensorflow_switch_predictor(X_train_processed, X_val_processed, X_test
 
 
     # Save Model
-    model_save_path = f'switch_predictor_tf_model_v2_{model_suffix}.keras' # Adjusted name version
+    model_save_path = f'models/switch_predictor_tf_model_v2_{model_suffix}.keras' # Adjusted name version
     print(f"Saving TF model to {model_save_path}")
     try:
         model.save(model_save_path)
@@ -342,7 +342,7 @@ def train_lgbm_switch_predictor(X_train, X_val, X_test,
         # Defaults if HPO is not run or fails to provide them
         'learning_rate': 0.02,
         'n_estimators': 2500,
-        'num_leaves': 31,
+        'num_leaves': 41,
         'reg_alpha': 0.1,
         'reg_lambda': 0.1,
         'colsample_bytree': 0.8,
@@ -390,7 +390,7 @@ def train_lgbm_switch_predictor(X_train, X_val, X_test,
 
 
     # Save Model and Feature Info
-    model_save_path = f'switch_predictor_lgbm_model_v2_{model_suffix}.txt'
+    model_save_path = f'models/switch_predictor_lgbm_model_v2_{model_suffix}.txt'
     print(f"Saving final LGBM model to {model_save_path}")
     try:
         lgbm_model.save_model(model_save_path)
@@ -398,7 +398,7 @@ def train_lgbm_switch_predictor(X_train, X_val, X_test,
     except Exception as e:
         print(f"Error saving final LGBM model: {e}")
 
-    lgbm_info_path = f'switch_predictor_lgbm_feature_info_v2_{model_suffix}.joblib'
+    lgbm_info_path = f'models/switch_predictor_lgbm_feature_info_v2_{model_suffix}.joblib'
     print(f"Saving final LGBM feature info to {lgbm_info_path}")
     try:
         lgbm_info = {
@@ -415,7 +415,7 @@ def train_lgbm_switch_predictor(X_train, X_val, X_test,
          print(f"Error saving final LGBM feature info: {e}")
 
     if scaler and features_scaled:
-        scaler_path = f'switch_predictor_lgbm_scaler_v2_{model_suffix}.joblib'
+        scaler_path = f'models/switch_predictor_lgbm_scaler_v2_{model_suffix}.joblib'
         print(f"Saving final LGBM scaler to {scaler_path}")
         try:
              joblib.dump(scaler, scaler_path)
@@ -929,6 +929,7 @@ def run_switch_training(parquet_path, model_type='tensorflow', feature_set='full
              # Use sklearn's utility
              class_weights_values = compute_class_weight('balanced', classes=unique_classes, y=y_train)
              # Map numpy types to standard Python types if needed, ensure correct keys (0 and 1)
+             class_weights_values[0] *= 1.3
              class_weight_dict = {int(cls): float(weight) for cls, weight in zip(unique_classes, class_weights_values)}
              # Ensure both 0 and 1 keys exist, even if one class was missing in train (shouldn't happen with split logic)
              class_weight_dict.setdefault(0, 1.0)
@@ -946,8 +947,8 @@ def run_switch_training(parquet_path, model_type='tensorflow', feature_set='full
     X_train_processed, X_val_processed, X_test_processed = None, None, None
     preprocessor = None
     # Define paths for saving preprocessing artifacts (using v2 in names)
-    feature_lists_path = f'switch_predictor_feature_lists_v2_{model_suffix}.joblib'
-    preprocessor_path = f'switch_predictor_tf_preprocessor_v2_{model_suffix}.joblib'
+    feature_lists_path = f'models/switch_predictor_feature_lists_v2_{model_suffix}.joblib'
+    preprocessor_path = f'models/switch_predictor_tf_preprocessor_v2_{model_suffix}.joblib'
 
     # Final check on feature lists based on X_train columns just before preprocessing
     final_train_cols = X_train.columns.tolist()

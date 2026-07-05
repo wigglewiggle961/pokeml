@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Poke-Bot Monitor</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Poke-Bot Monitor</h1>
+            <div id="status" class="status-disconnected">Disconnected</div>
+        </div>
+        <div class="info-bar">
+            <span>Turn: <strong id="turn-info">--</strong></span>
+            <span>Active: <strong id="active-pokemon">--</strong></span>
+            <span>Opponent: <strong id="opponent-pokemon">--</strong></span>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Action</th>
+                        <th>Probability</th>
+                    </tr>
+                </thead>
+                <tbody id="predictions-table-body">
+                    <tr>
+                        <td colspan="3">Waiting for data...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <script src="popup.js"></script>
+</body>
+</html>

@@ -34,6 +34,8 @@ import json
 import gc
 import glob
 import warnings
+import optuna
+from optuna.integration import TFKerasPruningCallback
 
 from feature_engineering import (
     sanitize_name, bin_hp, get_smogon_usages_df,
@@ -154,7 +156,10 @@ def build_vocab_encoders(X_train, categorical_embed_cols):
 
 def build_embedding_model(vocab_sizes, categorical_embed_cols, num_numerical,
                           num_revealed_p1, num_revealed_p2, num_classes,
-                          label_smoothing=0.05):
+                          label_smoothing=0.05,
+                          dense1_units=512, dense2_units=256, dense3_units=128,
+                          drop1_rate=0.25, drop2_rate=0.25, drop3_rate=0.2,
+                          learning_rate=0.001, print_summary=True):
     """
     Build Keras Functional API model with entity embedding branches.
     """
@@ -226,20 +231,20 @@ def build_embedding_model(vocab_sizes, categorical_embed_cols, num_numerical,
         x = layers.Concatenate(name='concat_all')(embed_outputs)
 
     # Deep classification head
-    x = layers.Dense(512, use_bias=False, name='dense1')(x)
+    x = layers.Dense(dense1_units, use_bias=False, name='dense1')(x)
     x = layers.BatchNormalization(name='bn1')(x)
     x = layers.Activation('swish', name='act1')(x)
-    x = layers.Dropout(0.25, name='drop1')(x)
+    x = layers.Dropout(drop1_rate, name='drop1')(x)
 
-    x = layers.Dense(256, use_bias=False, name='dense2')(x)
+    x = layers.Dense(dense2_units, use_bias=False, name='dense2')(x)
     x = layers.BatchNormalization(name='bn2')(x)
     x = layers.Activation('swish', name='act2')(x)
-    x = layers.Dropout(0.25, name='drop2')(x)
+    x = layers.Dropout(drop2_rate, name='drop2')(x)
 
-    x = layers.Dense(128, use_bias=False, name='dense3')(x)
+    x = layers.Dense(dense3_units, use_bias=False, name='dense3')(x)
     x = layers.BatchNormalization(name='bn3')(x)
     x = layers.Activation('swish', name='act3')(x)
-    x = layers.Dropout(0.2, name='drop3')(x)
+    x = layers.Dropout(drop3_rate, name='drop3')(x)
 
     output = layers.Dense(num_classes, activation='softmax', name='output')(x)
 
@@ -248,14 +253,15 @@ def build_embedding_model(vocab_sizes, categorical_embed_cols, num_numerical,
     # One-hot conversion for label smoothing support
     # Use CategoricalCrossentropy with label_smoothing
     model.compile(
-        optimizer=Adam(learning_rate=0.001),
+        optimizer=Adam(learning_rate=learning_rate),
         loss=keras.losses.CategoricalCrossentropy(label_smoothing=label_smoothing),
         metrics=[
             'accuracy',
             keras.metrics.TopKCategoricalAccuracy(k=5, name='top_5_accuracy')
         ]
     )
-    model.summary()
+    if print_summary:
+        model.summary()
     return model
 
 
@@ -324,7 +330,8 @@ def train_embedding_model(parquet_path, feature_set='medium',
                           min_feature_replay_count=50,
                           disable_smogon_features=False, smogon_top_n=100,
                           test_split_size=0.2, val_split_size=0.15,
-                          min_move_count=0):
+                          min_move_count=0,
+                          tune=False, n_trials=50):
     """
     Full training pipeline for the TF embedding action predictor.
     """
@@ -409,7 +416,7 @@ def train_embedding_model(parquet_path, feature_set='medium',
     print(f"Found {num_classes} unique moves.")
 
     suffix = feature_set
-    label_encoder_path = f'action_label_encoder_v1_{suffix}.joblib'
+    label_encoder_path = f'models/action_label_encoder_v1_{suffix}.joblib'
     joblib.dump(label_encoder, label_encoder_path)
     print(f"Label encoder saved to {label_encoder_path}")
 
@@ -523,37 +530,90 @@ def train_embedding_model(parquet_path, feature_set='medium',
         class_weight_dict = {c: 1.0 for c in range(num_classes)}
 
     # --- Build Model ---
-    model = build_embedding_model(
-        vocab_sizes=vocab_sizes,
-        categorical_embed_cols=categorical_embed_cols,
-        num_numerical=len(numerical_for_model),
-        num_revealed_p1=len(revealed_p1_cols),
-        num_revealed_p2=len(revealed_p2_cols),
-        num_classes=num_classes,
-        label_smoothing=label_smoothing
-    )
+    if tune:
+        print("\nStarting Optuna Hyperparameter Tuning...")
+        def objective(trial):
+            print(f"\n--- Starting Trial {trial.number} ---")
+            keras.backend.clear_session()
+            lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
+            drop1 = trial.suggest_float("drop1", 0.1, 0.4)
+            drop2 = trial.suggest_float("drop2", 0.1, 0.4)
+            drop3 = trial.suggest_float("drop3", 0.1, 0.4)
+            dense1 = trial.suggest_categorical("dense1", [256, 512, 1024])
+            dense2 = trial.suggest_categorical("dense2", [128, 256, 512])
+            dense3 = trial.suggest_categorical("dense3", [64, 128, 256])
 
-    if learning_rate != 0.001:
-        model.optimizer.learning_rate.assign(learning_rate)
+            model = build_embedding_model(
+                vocab_sizes=vocab_sizes,
+                categorical_embed_cols=categorical_embed_cols,
+                num_numerical=len(numerical_for_model),
+                num_revealed_p1=len(revealed_p1_cols),
+                num_revealed_p2=len(revealed_p2_cols),
+                num_classes=num_classes,
+                label_smoothing=label_smoothing,
+                dense1_units=dense1,
+                dense2_units=dense2,
+                dense3_units=dense3,
+                drop1_rate=drop1,
+                drop2_rate=drop2,
+                drop3_rate=drop3,
+                learning_rate=lr,
+                print_summary=False
+            )
 
-    # --- Train ---
-    print("\nStarting training...")
-    callbacks = [
-        EarlyStopping(monitor='val_loss', patience=10,
-                      restore_best_weights=True, verbose=1),
-        ReduceLROnPlateau(monitor='val_loss', factor=0.5,
-                          patience=5, min_lr=1e-6, verbose=1)
-    ]
-    history = model.fit(
-        train_inputs, y_train_oh,
-        validation_data=(val_inputs, y_val_oh),
-        epochs=epochs,
-        batch_size=batch_size,
-        class_weight=class_weight_dict,
-        callbacks=callbacks,
-        verbose=2
-    )
-    print("Training finished.")
+            callbacks = [
+                EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True, verbose=0),
+                ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6, verbose=0),
+                TFKerasPruningCallback(trial, "val_loss")
+            ]
+
+            history = model.fit(
+                train_inputs, y_train_oh,
+                validation_data=(val_inputs, y_val_oh),
+                epochs=epochs,
+                batch_size=batch_size,
+                class_weight=class_weight_dict,
+                callbacks=callbacks,
+                verbose=2
+            )
+
+            return float(min(history.history['val_loss']))
+
+        study = optuna.create_study(direction="minimize", storage="sqlite:///tuning_history.db", study_name="tf_action_predictor", load_if_exists=True, pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=3))
+        study.optimize(objective, n_trials=n_trials)
+        print("Best trial:")
+        print(study.best_trial)
+        return None, None
+    else:
+        model = build_embedding_model(
+            vocab_sizes=vocab_sizes,
+            categorical_embed_cols=categorical_embed_cols,
+            num_numerical=len(numerical_for_model),
+            num_revealed_p1=len(revealed_p1_cols),
+            num_revealed_p2=len(revealed_p2_cols),
+            num_classes=num_classes,
+            label_smoothing=label_smoothing,
+            learning_rate=learning_rate
+        )
+
+        # --- Train ---
+        print("\nStarting training...")
+        callbacks = [
+            EarlyStopping(monitor='val_loss', patience=10,
+                          restore_best_weights=True, verbose=1),
+            ReduceLROnPlateau(monitor='val_loss', factor=0.5,
+                              patience=5, min_lr=1e-6, verbose=1)
+        ]
+        history = model.fit(
+            train_inputs, y_train_oh,
+            validation_data=(val_inputs, y_val_oh),
+            epochs=epochs,
+            batch_size=batch_size,
+            class_weight=class_weight_dict,
+            callbacks=callbacks,
+            verbose=2
+        )
+        print("Training finished.")
 
     # --- Evaluate ---
     print("\nEvaluating on test set...")
@@ -566,7 +626,7 @@ def train_embedding_model(parquet_path, feature_set='medium',
     print(f"TF Embedding Test Top-5 Accuracy: {test_top5:.4f}")
 
     # --- Save Artifacts ---
-    model_path = f'action_tf_embedding_v1_{suffix}.keras'
+    model_path = f'models/action_tf_embedding_v1_{suffix}.keras'
     model.save(model_path)
     print(f"Model saved to {model_path}")
 
@@ -583,12 +643,12 @@ def train_embedding_model(parquet_path, feature_set='medium',
         'test_top5_accuracy': float(test_top5),
         'test_loss': float(test_loss),
     }
-    meta_path = f'action_tf_embedding_metadata_v1_{suffix}.json'
+    meta_path = f'models/action_tf_embedding_metadata_v1_{suffix}.json'
     with open(meta_path, 'w') as f:
         json.dump(metadata, f, indent=2)
     print(f"Metadata saved to {meta_path}")
 
-    artifacts_path = f'action_tf_embedding_artifacts_v1_{suffix}.joblib'
+    artifacts_path = f'models/action_tf_embedding_artifacts_v1_{suffix}.joblib'
     joblib.dump({
         'vocab_encoders': vocab_encoders,
         'scaler': scaler,
@@ -634,6 +694,10 @@ if __name__ == '__main__':
                         help="Validation set fraction.")
     parser.add_argument('--min_move_count', type=int, default=0,
                         help="Minimum move occurrences to include (0=no filter).")
+    parser.add_argument('--tune', action='store_true',
+                        help="Run Optuna hyperparameter tuning.")
+    parser.add_argument('--n_trials', type=int, default=50,
+                        help="Number of tuning trials (if --tune is set).")
     args = parser.parse_args()
 
     if args.test_split + args.val_split >= 1.0:
@@ -653,4 +717,6 @@ if __name__ == '__main__':
         test_split_size=args.test_split,
         val_split_size=args.val_split,
         min_move_count=args.min_move_count,
+        tune=args.tune,
+        n_trials=args.n_trials,
     )

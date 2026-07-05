@@ -17,9 +17,13 @@ The project follows a complete ML pipeline:
 - `augment_perspectives.py`: Augments data by flipping perspectives to increase training diversity.
 
 ### 2. Model Training
-- `train_action_predictor.py`: Trains a multi-class model to predict specific **moves**.
+- `train_action_predictor.py`: Trains a multi-class move predictor using **LightGBM** (primary) or a plain TF Dense network. Stable pipeline — do not modify.
+- `train_action_predictor_embedding.py`: *(In development — Phase 4)* TF-only trainer that uses **learned entity embeddings** (species, moves, types) instead of one-hot encoding, targeting higher generalisation accuracy.
 - `train_switch_predictor.py`: A binary classifier predicting **if** the opponent will switch.
 - `train_pokemon_switch_predictor.py`: A multi-class classifier predicting **which Pokémon** the opponent will switch to.
+
+### 2a. Shared Utilities
+- `feature_engineering.py`: *(In development — Phase 4)* Shared helpers extracted from the training scripts: `sanitize_name`, `bin_hp`, `get_smogon_usages_df`, `find_active_species`, and the medium feature set builder. Imported by both training scripts to avoid duplication.
 
 ### 3. Prediction Bot
 - `predict_action.py`: The core bot implementation. It uses an ensemble approach:
@@ -35,9 +39,14 @@ The project follows a complete ML pipeline:
 python process_replays.py ./replays_dir output.parquet --format parquet
 ```
 
-### Train Move Predictor
+### Train Move Predictor (LightGBM / plain TF)
 ```bash
 python train_action_predictor.py data.parquet --model_type lightgbm --feature_set medium
+```
+
+### Train Move Predictor (Embedding TF — Phase 4)
+```bash
+python train_action_predictor_embedding.py data.parquet --feature_set medium
 ```
 
 ### Run the Bot

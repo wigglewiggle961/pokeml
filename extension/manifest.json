@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Poke-Bot Monitor",
+  "version": "1.0",
+  "description": "Displays live predictions from the demonstration.py bot.",
+  "permissions": [
+    "sidePanel"  
+  ],
+  "host_permissions": [
+    "http://localhost/",
+    "ws://localhost/"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  }
+}
