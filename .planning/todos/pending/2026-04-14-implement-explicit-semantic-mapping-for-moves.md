@@ -6,6 +6,11 @@ files:
   - train_action_predictor.py
 ---
 
+> **⚠️ Superseded in scope by [DEEP-01](../../research/DEEP-01-representation-redesign.md)
+> (2026-07-05).** The "do NOT map the species name" restriction below applied to the now-frozen
+> LightGBM pipeline only — DEEP-01 proposes exactly that mapping for the embedding pipeline.
+> The move-semantics idea itself lands as DEEP-01 Stage 4; close this todo when that ships.
+
 ## Problem
 
 Currently, the model uses multi-hot encoding for `revealed_moves` (e.g., creating 150+ sparse binary columns for each move like `has_flamethrower=1`). This sparse representation causes LightGBM to struggle with overfitting, as it attempts to build deep, fragmented trees on highly sparse generic data rather than learning cohesive strategies. Embeddings (Move2Vec) would solve this but are complex to implement. 
